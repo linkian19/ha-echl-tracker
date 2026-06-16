@@ -209,7 +209,7 @@ Each entry in `game_events`:
 
 #### Last game summary (in-memory; populated on demand)
 
-Available in `NO_GAME` and `PRE` states to back the card's Last Game history view. Populated automatically on the first successful poll after HA restarts, and also snapshotted whenever a game transitions to `FINAL`. Cleared on integration reload.
+Available in `NO_GAME` and `PRE` states to back the card's Last Game history view. For HockeyTech leagues, kept up to date throughout the session — updated whenever a newer completed game appears in the scorebar, no restart required. For NHL, populated on the first successful poll after HA restarts. In both cases also snapshotted whenever a game transitions to `FINAL`. Cleared on integration reload.
 
 | Attribute | Description |
 |-----------|-------------|
@@ -338,7 +338,7 @@ The 5-minute interval after a scheduled start time covers a brief scoreboard lag
 - No API key required; data comes from the public `api-web.nhle.com/v1` API.
 - Team logos are fetched from the NHL CDN at startup and cached for the session.
 - During live and final games, a second call to `gamecenter/{id}/landing` provides shots on goal and the play-by-play events feed.
-- During the off-season or after a team is eliminated from the playoffs, the sensor state is `NO_GAME` with no `next_game` attributes.
+- During the off-season or after a team is eliminated from the playoffs, the sensor state is `NO_GAME`. The `next_game` attributes will populate once the next season's schedule is available from the NHL API.
 
 ### HockeyTech leagues (PWHL, AHL, ECHL, CHL, OHL, WHL, QMJHL, USHL, BCHL, OJHL, AJHL, SJHL, MJHL, MHL)
 
@@ -358,7 +358,7 @@ Home Assistant loads custom integration translations at startup, not at reload t
 Updating via HACS reloads the integration and resets in-memory notification state. The win notification includes a 12-hour recency guard to prevent this. Upgrade to v1.3.8 or later.
 
 **Goal/Live notifications fired for a game that already ended**
-The HockeyTech API occasionally returns a completed game with a non-final status code hours after it ended, causing the integration to briefly re-enter LIVE state. LIVE game detection uses a 4-hour recency cutoff so stale API data for completed games is ignored.
+The HockeyTech API occasionally returns a completed game with a non-final status code hours after it ended, causing the integration to briefly re-enter LIVE state. LIVE game detection uses an 8-hour recency cutoff so stale API data for completed games is ignored.
 
 ---
 
