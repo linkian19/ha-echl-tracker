@@ -80,6 +80,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._game_final_id: str | None = None
         self._last_game_summary: dict | None = None
         self._last_game_fetch_attempted: bool = False
+        self._last_completed_ht_id: str | None = None
         # Logo cache keyed by team ID (HockeyTech) or abbreviation (NHL).
         # HockeyTech CDN paths include a version suffix that cannot be constructed
         # from team ID alone, so we populate this from live API responses.
@@ -109,6 +110,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Force the next update to re-fetch schedule/logo data from the API."""
         self._schedule_cache = None
         self._schedule_cache_time = None
+        self._last_completed_ht_id = None
 
     def clear_final_window(self) -> None:
         """Expire the FINAL display window so the next refresh reflects current game state.
@@ -311,18 +313,21 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data["recent_games"] = recent
         data["next_game"] = next_game
 
-        # Populate last_game_summary from scorebar if missing (e.g. after HA restart)
-        if self._last_game_summary is None and not self._last_game_fetch_attempted:
+        # Keep last_game_summary updated with the most recently completed scorebar game.
+        # Runs when no active game is found to avoid double-fetching the active game summary.
+        # _last_completed_ht_id prevents redundant API calls across polls.
+        if active is None:
             completed_ht = [g for g in team_games if str(g.get("GameStatus", "")) == "4"]
-            completed_ht.sort(key=lambda g: g.get("GameDateISO8601", ""), reverse=True)
             if completed_ht:
-                last = completed_ht[0]
-                last_id = str(last.get("GameID") or last.get("ID") or "")
-                if last_id:
-                    self._last_game_fetch_attempted = True
-                    last_summary = await self._fetch_ht_game_summary(last_id)
+                completed_ht.sort(key=lambda g: g.get("GameDateISO8601", ""), reverse=True)
+                most_recent = completed_ht[0]
+                most_recent_id = str(most_recent.get("GameID") or most_recent.get("ID") or "")
+                current_id = str(self._last_game_summary.get("game_id") or "") if self._last_game_summary else ""
+                if most_recent_id and most_recent_id != current_id and most_recent_id != self._last_completed_ht_id:
+                    self._last_completed_ht_id = most_recent_id
+                    last_summary = await self._fetch_ht_game_summary(most_recent_id)
                     if last_summary:
-                        last_data = self._ht_normalize_game(last, last_summary)
+                        last_data = self._ht_normalize_game(most_recent, last_summary)
                         self._last_game_summary = {
                             k: last_data.get(k) for k in (
                                 "game_id", "start_time",
@@ -338,7 +343,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return data
 
     def _ht_find_active(self, team_games: list[dict]) -> dict | None:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+        # 8-hour window from game start time to account for game duration: a game
+        # starting at 23:00 UTC that runs 3 hours ends at 02:00 UTC, and checking
+        # at 04:00 UTC would put the start time outside a 4-hour window.
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
         live = None
         recent_final = None
         pre = None
@@ -676,7 +684,14 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         finals = [g for g in team_games if g.get("gameState") in NHL_FINAL_STATES]
         if finals:
             return max(finals, key=lambda g: g.get("startTimeUTC") or g.get("gameDate") or "")
-        return next((g for g in team_games if g.get("gameState") in NHL_PRE_STATES), None)
+        # Only return PRE/FUT games within 24 hours — the off-season scoreboard can
+        # return next season's October games as FUT months before they start.
+        for g in team_games:
+            if g.get("gameState") in NHL_PRE_STATES:
+                hours = self._hours_until(g.get("startTimeUTC") or g.get("gameDate", ""))
+                if hours is not None and hours <= 24:
+                    return g
+        return None
 
     async def _get_nhl_schedule_cached(self) -> list[dict]:
         now = datetime.now(timezone.utc)

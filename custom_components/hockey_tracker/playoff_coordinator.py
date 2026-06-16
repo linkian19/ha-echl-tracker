@@ -381,11 +381,15 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if final:
             return final
-        return next(
-            (g for g in games if g.get("gameState") in NHL_PRE_STATES
-             and self._nhl_team_in_game(g)),
-            None,
-        )
+        # Only return PRE/FUT games within 24 hours — off-season scoreboards can
+        # return next season's October games as FUT months before they start.
+        now = datetime.now(timezone.utc)
+        for g in games:
+            if g.get("gameState") in NHL_PRE_STATES and self._nhl_team_in_game(g):
+                hours = (self._nhl_parse_dt(g) - now).total_seconds() / 3600
+                if hours <= 24:
+                    return g
+        return None
 
     def _nhl_team_in_game(self, game: dict) -> bool:
         abbrevs = {game.get("awayTeam", {}).get("abbrev"), game.get("homeTeam", {}).get("abbrev")}
@@ -880,10 +884,14 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return f"Round {round_num}"
 
     def _ht_find_followed_game(self, scorebar: list[dict]) -> dict | None:
+        # 8-hour window from game start time to account for game duration — a game
+        # starting at 23:00 UTC that runs 3 hours ends at 02:00 UTC, and a 4-hour
+        # window would miss it entirely by 04:00 UTC.
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
         live = next(
             (g for g in scorebar
              if str(g.get("GameStatus", "")) not in ("1", "4") and self._ht_team_in_game(g)
-             and self._ht_parse_dt(g) >= datetime.now(timezone.utc) - timedelta(hours=4)),
+             and self._ht_parse_dt(g) >= cutoff),
             None,
         )
         if live:
@@ -891,7 +899,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         final = next(
             (g for g in scorebar
              if str(g.get("GameStatus", "")) == "4" and self._ht_team_in_game(g)
-             and self._ht_parse_dt(g) >= datetime.now(timezone.utc) - timedelta(hours=4)),
+             and self._ht_parse_dt(g) >= cutoff),
             None,
         )
         if final:
