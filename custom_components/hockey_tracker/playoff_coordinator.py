@@ -884,10 +884,14 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return f"Round {round_num}"
 
     def _ht_find_followed_game(self, scorebar: list[dict]) -> dict | None:
-        # 8-hour window from game start time to account for game duration — a game
+        # 8-hour lookback from game start time accounts for game duration — a game
         # starting at 23:00 UTC that runs 3 hours ends at 02:00 UTC, and a 4-hour
         # window would miss it entirely by 04:00 UTC.
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
+        # 24-hour forward cap on PRE games prevents a far-future scheduled game
+        # from showing as PRE-GAME instead of the NO_GAME + upcoming widget.
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=8)
+        pre_cutoff = now + timedelta(hours=24)
         live = next(
             (g for g in scorebar
              if str(g.get("GameStatus", "")) not in ("1", "4") and self._ht_team_in_game(g)
@@ -906,7 +910,8 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return final
         return next(
             (g for g in scorebar
-             if str(g.get("GameStatus", "")) == "1" and self._ht_team_in_game(g)),
+             if str(g.get("GameStatus", "")) == "1" and self._ht_team_in_game(g)
+             and self._ht_parse_dt(g) <= pre_cutoff),
             None,
         )
 

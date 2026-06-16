@@ -343,24 +343,29 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return data
 
     def _ht_find_active(self, team_games: list[dict]) -> dict | None:
-        # 8-hour window from game start time to account for game duration: a game
+        # 8-hour lookback from game start time accounts for game duration: a game
         # starting at 23:00 UTC that runs 3 hours ends at 02:00 UTC, and checking
         # at 04:00 UTC would put the start time outside a 4-hour window.
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
+        # 24-hour forward cap on PRE games prevents a far-future scheduled game
+        # from showing as PRE-GAME instead of the NO_GAME + upcoming widget.
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=8)
+        pre_cutoff = now + timedelta(hours=24)
         live = None
         recent_final = None
         pre = None
         for g in team_games:
             status = str(g.get("GameStatus", ""))
             if status not in ("1", "4"):
-                # No cutoff for live games — long OT periods can push past 4 hours.
+                # No cutoff for live games — long OT periods can push past 8 hours.
                 if live is None:
                     live = g
             elif status == "4" and recent_final is None:
                 if self._ht_parse_dt(g) >= cutoff:
                     recent_final = g
             elif status == "1" and pre is None:
-                pre = g
+                if self._ht_parse_dt(g) <= pre_cutoff:
+                    pre = g
         return live or recent_final or pre
 
     def _ht_extract_recent(self, team_games: list[dict]) -> list[dict]:
